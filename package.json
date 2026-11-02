@@ -1,0 +1,65 @@
+{
+  "name": "portscope",
+  "version": "2.2.1",
+  "packageManager": "pnpm@11.28.5",
+  "private": true,
+  "description": "A Windows-first networking workbench with real-time port monitoring, ICMP Ping/Traceroute, DNS diagnostics, and a live network atlas.",
+  "bin": { "portscope": "server.js" },
+  "files": ["server.js", "lib/", "web/", "LICENSE", "README.md"],
+  "repository": { "type": "git", "url": "git+https://github.com/jrrub2/PortScope.git" },
+  "bugs": { "url": "https://github.com/jrrub2/PortScope/issues" },
+  "homepage": "https://github.com/jrrub2/PortScope#readme",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "open": "node server.js --open",
+    "dev": "node --watch server.js",
+    "test": "node tools/check-frontend.mjs",
+    "dev:web": "vite build --watch --config frontend/vite.config.mts",
+    "build": "tsc -p frontend/tsconfig.json && vite build --config frontend/vite.config.mts",
+    "check": "tsc -p frontend/tsconfig.json"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "keywords": [
+    "localhost",
+    "ports",
+    "monitor",
+    "developer-tools",
+    "windows"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "cn": "^0.5.1",
+    "class-variance-authority": "^0.7.1",
+    "radix-ui": "^1.4.3",
+    "lucide-react": "^0.577.0",
+    "cmdk": "^1.1.1",
+    "react-day-picker": "^9.14.0",
+    "date-fns": "^4.1.0",
+    "recharts": "3.8.0",
+    "sonner": "^2.0.7",
+    "next-themes": "^0.4.6",
+    "react-resizable-panels": "^4.0.0",
+    "react-hook-form": "^7.71.2",
+    "@hookform/resolvers": "^5.2.2",
+    "zod": "^4.3.6",
+    "maplibre-gl": "^6.16.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/node": "^24.12.0",
+    "@types/geojson": "^7946.0.16",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "@vitejs/plugin-react": "^6.1.2",
+    "tailwindcss": "^4.2.1",
+    "@tailwindcss/vite": "^4.2.1",
+    "tw-animate-css": "^1.4.0"
+  }
+}
