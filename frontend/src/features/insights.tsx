@@ -172,11 +172,12 @@ function Connections({ state, network, onPortSelect }: { state: State; network: 
 
 function Processes({ state, onPortSelect }: { state: State; onPortSelect: (port: Port) => void }) {
   const [query, setQuery] = useState('');
+  const locale = getLocale();
   const groups = useMemo(() => {
     const byPid = new Map<number, Port[]>();
     for (const port of state.ports) byPid.set(port.pid, [...(byPid.get(port.pid) ?? []), port]);
     return Array.from(byPid, ([pid, ports]) => ({ pid, ports, name: ports.find(port => port.processName)?.processName || l('Unknown process', 'Proses tidak diketahui') })).sort((a, b) => b.ports.length - a.ports.length || a.pid - b.pid);
-  }, [state.ports]);
+  }, [state.ports, locale]);
   const filtered = groups.filter(group => [group.pid, group.name, ...group.ports.map(port => port.port)].join(' ').toLowerCase().includes(query.toLowerCase().trim()));
   return <Card>
 <CardHeader>

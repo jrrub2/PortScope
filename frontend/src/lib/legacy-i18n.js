@@ -284,7 +284,7 @@ const en = {
   'help.rescan': 'Rescan ports now',
   'help.toggleView': 'Switch table or grid view',
   'help.openHelp': 'Open this help panel',
-  'help.footnote': 'PortScope only reads data from the system. It never stops or changes any process.',
+  'help.footnote': 'Monitoring is read-only. Stopping a listener requires explicit confirmation.',
 
   'tooltip.table': 'Table',
   'tooltip.grid': 'Grid',
@@ -620,7 +620,7 @@ const id = {
   'help.rescan': 'Pindai ulang port sekarang',
   'help.toggleView': 'Ganti tampilan tabel / grid',
   'help.openHelp': 'Buka panel bantuan ini',
-  'help.footnote': 'PortScope hanya membaca data dari sistem. Aplikasi ini tidak pernah menghentikan atau mengubah proses apa pun.',
+  'help.footnote': 'Pemantauan hanya membaca. Menghentikan listener memerlukan konfirmasi eksplisit.',
 
   'tooltip.table': 'Tabel',
   'tooltip.grid': 'Grid',
@@ -956,7 +956,7 @@ const es = {
   'help.rescan': 'Volver a escanear puertos ahora',
   'help.toggleView': 'Cambiar entre tabla y cuadrícula',
   'help.openHelp': 'Abrir este panel de ayuda',
-  'help.footnote': 'PortScope solo lee datos del sistema. Nunca detiene ni modifica ningún proceso.',
+  'help.footnote': 'La supervisión es de solo lectura. Detener un servicio requiere confirmación explícita.',
 
   'tooltip.table': 'Tabla',
   'tooltip.grid': 'Cuadrícula',
@@ -1292,7 +1292,7 @@ const ja = {
   'help.rescan': '今すぐポートを再スキャン',
   'help.toggleView': 'テーブル／グリッド表示を切り替え',
   'help.openHelp': 'このヘルプを開く',
-  'help.footnote': 'PortScope はシステムのデータを読み取るだけで、プロセスを停止・変更しません。',
+  'help.footnote': '監視は読み取り専用です。リスナーの停止には明示的な確認が必要です。',
 
   'tooltip.table': 'テーブル',
   'tooltip.grid': 'グリッド',
@@ -1628,7 +1628,7 @@ const zh = {
   'help.rescan': '立即重新扫描端口',
   'help.toggleView': '切换表格或网格视图',
   'help.openHelp': '打开此帮助面板',
-  'help.footnote': 'PortScope 仅读取系统数据，绝不会停止或更改任何进程。',
+  'help.footnote': '监控操作为只读。停止监听服务需要明确确认。',
 
   'tooltip.table': '表格',
   'tooltip.grid': '网格',
@@ -1695,6 +1695,12 @@ const zh = {
 
 const DICTS = { en, id, es, ja, zh };
 const FALLBACK = en;
+// Reuse existing translations when the React shell supplies literal English copy.
+const textKeys = new Map(Object.entries(en).filter(([, value]) => typeof value === 'string').map(([key, value]) => [value, key]));
+export function translateText(text) {
+  const key = textKeys.get(text);
+  return key === undefined ? undefined : t(key);
+}
 const STORAGE_KEY = 'portscope.lang';
 const listeners = new Set();
 let current = 'en';

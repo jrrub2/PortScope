@@ -9,16 +9,21 @@
  * - Binds to 127.0.0.1 only (never exposed to the LAN).
  * - Serves the JSON API / SSE stream and static dashboard from web/.
  * - Passive observation by default; explicit, bounded networking tools may
- *   contact selected targets. It never kills or reconfigures monitored services.
+ *   contact selected targets. Explicit guarded confirmation can stop a listener owner;
+ *   no automatic process control or service reconfiguration occurs.
  */
 
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const fs = require('node:fs/promises');
+const { randomBytes, timingSafeEqual } = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 const { Monitor } = require('./lib/monitor');
 const { ProcessDetailService } = require('./lib/procdetail');
+const { ProcessControlService } = require('./lib/process-control');
+const { UpdateService } = require('./lib/updates');
 const { serveStatic } = require('./lib/static');
 const { errorText } = require('./lib/util');
 const { probeHostFor } = require('./lib/classify');
@@ -239,7 +244,7 @@ function sendPlainText(res, status, message) {
  * @returns {Promise<{port: number, fallbackFrom: number|null}>}
  */
 function listenWithFallback(server, port) {
-  const totalAttempts = port === 0 ? 1 : PORT_FALLBACK_ATTEMPTS + 1;
+  const totalAttempts = port === 0 || process.env.PORTSCOPE_UPDATE_RESTART === '1' ? 1 : PORT_FALLBACK_ATTEMPTS + 1;
 
   return new Promise((resolve, reject) => {
     let attempt = 0;
@@ -355,6 +360,11 @@ async function main() {
   });
   const store = monitor.store;
   const processDetails = new ProcessDetailService();
+  const processControl = new ProcessControlService();
+  const updates = new UpdateService({ version: VERSION, appDir: __dirname });
+  let updateRestarting = false;
+  const controlToken = /^[a-f0-9]{64}$/.test(process.env.PORTSCOPE_CONTROL_TOKEN || '') ? process.env.PORTSCOPE_CONTROL_TOKEN : randomBytes(32).toString('hex');
+  const canControl = req => { const value = req.headers['x-portscope-control']; return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) && timingSafeEqual(Buffer.from(value, 'hex'), Buffer.from(controlToken, 'hex')); };
   const checks = new CheckService();
   const diagnostics = new DiagnosticService();
   const dnsTools = new DnsService();
@@ -580,6 +590,36 @@ async function main() {
     const isRead = method === 'GET' || method === 'HEAD';
     const head = method === 'HEAD';
 
+    if (pathname === '/api/update/status') {
+      if (!isRead) return sendMethodNotAllowed(res, { head });
+      return sendJson(res, 200, updates.status(), { head });
+    }
+    if (pathname === '/api/update/check') {
+      if (method !== 'POST') return sendMethodNotAllowed(res, { head });
+      return handleToolInput(req, res, (input, signal) => updates.check(input, signal));
+    }
+    if (pathname === '/api/update/apply') {
+      if (method !== 'POST') return sendMethodNotAllowed(res, { head });
+      if (!canControl(req)) return sendApiError(res, 403, 'CONTROL_REQUIRED', 'Open the private dashboard link printed in the PortScope console to authorize destructive actions.');
+      return handleToolInput(req, res, async (input, signal) => {
+        if (updateRestarting) throw Object.assign(new Error('An update restart is already pending.'), { status: 409, code: 'UPDATE_BUSY' });
+        updateRestarting = true;
+        try {
+          const result = await updates.prepare(input, signal);
+          if (signal.aborted) throw Object.assign(new Error('Update preparation was disconnected. Nothing was installed.'), { status: 499, code: 'UPDATE_ABORTED' });
+          // Only the native launcher may apply the verified stage, after this server and its workers exit.
+          const handoff = await fs.open(path.join(process.env.PORTSCOPE_UPDATE_DIR, 'handoff.json'), 'wx', 0o600);
+          try { await handoff.writeFile(JSON.stringify({ port: listenInfo.port, interval: cli.interval }), 'utf8'); await handoff.sync(); } finally { await handoff.close(); }
+          if (signal.aborted) throw Object.assign(new Error('Update handoff was disconnected. Restart PortScope before trying again.'), { status: 499, code: 'UPDATE_ABORTED' });
+          res.once('finish', () => setTimeout(() => shutdown('update', 75), 100));
+          return { ok: true, version: result.version, status: 'restarting' };
+        } catch (error) {
+          updateRestarting = false;
+          if (error.status || error.statusCode) throw error;
+          throw Object.assign(new Error('Update handoff could not be written. No files were installed; restart PortScope before retrying.'), { status: 500, code: 'UPDATE_STORAGE' });
+        }
+      });
+    }
     if (pathname === '/api/state') {
       if (!isRead) return sendMethodNotAllowed(res, { head });
       return sendJson(res, 200, store.snapshot(), { head });
@@ -645,6 +685,7 @@ async function main() {
         pid: process.pid,
         uptimeMs: Math.round(process.uptime() * 1000),
         ready: store.ready,
+        ...(/^[a-f0-9]{32}$/.test(process.env.PORTSCOPE_UPDATE_HEALTH_NONCE || '') ? { updateNonce: process.env.PORTSCOPE_UPDATE_HEALTH_NONCE, updateCommitted: await updates.committed(listenInfo.port) } : {}),
       }, { head });
     }
 
@@ -656,6 +697,17 @@ async function main() {
         ok: true,
         queued,
         scanning: store.isScanning,
+      });
+    }
+
+    const stopMatch = /^\/api\/ports\/([^/]+)\/stop$/.exec(pathname);
+    if (stopMatch) {
+      if (method !== 'POST') return sendMethodNotAllowed(res, { head });
+      if (!canControl(req)) return sendApiError(res, 403, 'CONTROL_REQUIRED', 'Open the private dashboard link printed in the PortScope console to authorize destructive actions.');
+      return handleToolInput(req, res, async (input, signal) => {
+        const result = await processControl.stop(stopMatch[1], input, signal);
+        monitor.requestScan();
+        return result;
       });
     }
 
@@ -804,9 +856,11 @@ async function main() {
   });
 
   printStartupBanner({ port: listenInfo.port, requestedPort: cli.port, interval: cli.interval });
+  const dashboardUrl = `http://${HOST}:${listenInfo.port}/#overview?control=${controlToken}`;
+  console.log('  Private control link (do not share): ' + dashboardUrl);
 
   if (cli.open) {
-    openBrowser(`http://${HOST}:${listenInfo.port}/`);
+    openBrowser(dashboardUrl);
   }
 
   // Scan immediately; the HTTP API is already answering (ready=false until the
@@ -815,7 +869,7 @@ async function main() {
 
   // -- Shutdown --------------------------------------------------------------
 
-  function shutdown(signal) {
+  function shutdown(signal, exitCode = 0) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n  Menghentikan PortScope (${signal})...`);
@@ -836,14 +890,14 @@ async function main() {
     sseClients.clear();
 
     try {
-      server.close(() => process.exit(0));
+      server.close(() => process.exit(exitCode));
       server.closeIdleConnections?.();
     } catch {
-      process.exit(0);
+      process.exit(exitCode);
     }
 
     // Guarantee the process cannot hang on a stuck socket.
-    setTimeout(() => process.exit(0), SHUTDOWN_FORCE_MS);
+    setTimeout(() => process.exit(exitCode), SHUTDOWN_FORCE_MS);
   }
 
   process.on('SIGINT', () => shutdown('SIGINT'));

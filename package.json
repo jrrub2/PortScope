@@ -1,6 +1,6 @@
 {
   "name": "portscope",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "packageManager": "pnpm@11.28.5",
   "private": true,
   "description": "A Windows-first networking workbench with real-time port monitoring, ICMP Ping/Traceroute, DNS diagnostics, and a live network atlas.",

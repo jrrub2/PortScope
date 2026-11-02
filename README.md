@@ -15,9 +15,9 @@ Monitor ports and processes, inspect connections, run ICMP Ping and continuous T
 
 ## Features
 
-- **Ports & processes** — live listener inventory, HTTP service identification, on-demand process details, search, filters, favorites, and watchlists.
+- **Ports & processes** — live listener inventory, HTTP service identification, process details, search, filters, favorites, and watchlists. On Windows, an explicit red confirmation can force-stop an eligible listener's owning process.
 - **Connections** — TCP/UDP socket inventory, local/remote endpoints, process ownership, and interface information.
-- **Ping / Traceroute** — ICMP Ping and MTR-style continuous monitoring with independently scheduled per-TTL probes, loss/latency statistics, sparklines, and selected-hop charts.
+- **Ping / Traceroute** — ICMP Ping and MTR-style continuous monitoring with independently scheduled per-TTL probes, loss/latency statistics, sparklines, selected-hop charts, and optional reverse-DNS names beside hop IPs.
 - **DNS tools** — record queries, custom resolvers, resolver comparison, reverse lookups, and optional browser DNS observations.
 - **Network atlas** — offline-first map, live connection destinations, manual locations, and consent-only GeoIP/online basemap.
 - **Health & history** — local endpoint checks, session analytics, activity logs, snapshots, comparisons, and JSON/CSV exports.
@@ -27,7 +27,7 @@ Monitor ports and processes, inspect connections, run ICMP Ping and continuous T
 
 ### Windows: portable app (recommended)
 
-1. Open [Releases](https://github.com/jrrub2/PortScope/releases) and download **PortScope-2.2.1-windows-x64.zip**.
+1. Open [Releases](https://github.com/jrrub2/PortScope/releases) and download **PortScope-2.2.2-windows-x64.zip**.
 2. Extract the **entire ZIP** to a folder. Do not run it from the ZIP preview.
 3. Double-click **PortScope.exe**. Your browser opens the local dashboard automatically.
 4. Keep its console window open while monitoring. Press **Ctrl+C** or close that console to stop PortScope and its workers.
@@ -60,7 +60,17 @@ node server.js --help
 node server.js --port 5000 --interval 2000
 ```
 
-Stop with **Ctrl+C**. After updating, restart the backend and refresh the browser; a page refresh alone does not update a running server.
+For force-stop or installation controls, use the **private control link** printed in the console (opened automatically with `--open`). Its fragment authorizes only that browser tab; do not share the link. Opening the plain dashboard address still allows monitoring. After a manual server restart, use its newly printed private link again.
+
+Stop with **Ctrl+C**. After manually updating source, restart the backend and refresh the browser; a page refresh alone does not update a running server. The supported portable updater performs its own restart.
+
+### Updates from GitHub
+
+Settings checks the public [GitHub Releases](https://github.com/jrrub2/PortScope/releases) feed—no separate hosting or account is needed. Automatic notifications check when the dashboard opens and every six hours while visible; turn them off in Settings for offline use. Downloads and installation **never start automatically**. Preview releases are labeled.
+
+One-click installation requires the updated **Windows x64 portable launcher**. It verifies the release asset's GitHub SHA-256 digest, stages the package, preserves a rollback backup, and restarts on the same local port. Browser data stays in place; in-memory diagnostics and history end on restart. Success is shown only after the native transaction commits. If interrupted, retain the update session and backup; the launcher prints the journal path and refuses to boot partially swapped files until they are manually recovered. Unsigned releases still trust the GitHub publisher; a checksum is not a publisher signature.
+
+Older portable launchers (including 2.2.1), source checkouts, and unsupported layouts use the manual release link. They are not overwritten or reset by the updater. Installing a release with the new launcher once enables subsequent one-click updates.
 
 ## Screenshots
 
@@ -93,8 +103,8 @@ Linux/macOS must use the source entry point. Process visibility depends on OS pe
 ## Privacy & security
 
 - **Local server only:** binds to `127.0.0.1`, validates Host/Origin/Fetch Metadata, and does not expose a LAN dashboard. No cloud account or automatic telemetry.
-- **Observation, not control:** never kills monitored processes, modifies the firewall, or reconfigures services. Automatic HTTP probes and health checks are limited to loopback addresses.
-- **Explicit network traffic:** Run sends probes to your chosen target. GeoIP, the online basemap, and the browser DNS observer require explicit opt-in and disclose their providers. The offline atlas does not require external requests.
+- **Guarded process control:** monitoring is read-only, but Windows port details can force-stop an eligible process after explicit red confirmation. This can lose unsaved work and affect all ports owned by that process; child processes may also exit. PortScope revalidates process identity and listener ownership and refuses protected, service, other-user, or application-ancestor processes. It does not modify the firewall or reconfigure services.
+- **Network traffic:** update notifications contact the fixed public GitHub Releases feed by default; disable automatic checks in Settings if desired. Run sends probes to your chosen target; Resolve names queries the host's DNS resolvers for hop PTR records. GeoIP, the online basemap, and the browser DNS observer require explicit opt-in and disclose their providers. The offline atlas does not require external requests.
 - **Your device stays yours:** the sidebar displays your machine hostname, not a developer account. Live data can include process names, paths, local/remote addresses, and service titles. Review screenshots and exports before sharing them.
 - **Local storage:** favorites, settings, snapshots, health definitions, and manual map locations stay in browser storage. Backend history is bounded and held in memory, not a cloud database.
 - **Public assets are separate:** repository screenshots are generated from isolated fixtures. Historical machine captures, QA reports, local environment files, and personal archives are excluded from publication.

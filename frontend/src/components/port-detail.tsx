@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight, Copy, Eye, EyeOff, Loader2, RefreshCw, ShieldAlert, Star, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUpRight, Copy, Eye, EyeOff, Loader2, RefreshCw, ShieldAlert, Square, Star, X } from 'lucide-react';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 import { toast } from 'sonner';
 import type { Port, ProcessDetail } from '@/lib/types';
+import { controlHeaders } from '@/lib/control';
 import { cn, copyText, formatAge, formatMs } from '@/lib/utils';
-import { getLocale, t } from '@/lib/i18n';
+import { getLocale, l, t } from '@/lib/i18n';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
@@ -18,8 +20,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
-const l = (en: string, id: string) => getLocale() === 'id' ? id : en;
-
 export function portUrl(port: Port): string | null {
   if (!['http', 'https'].includes(port.protocol) || !Number.isInteger(port.port) || port.port < 1 || port.port > 65535) return null;
   return port.protocol + '://localhost:' + port.port + '/';
@@ -29,10 +29,10 @@ function Fields({ rows }: { rows: [string, React.ReactNode][] }) {
   return <dl className="grid gap-0 text-sm">{rows.map(([label, value]) => <div key={label} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-4 border-b py-3 last:border-0"><dt className="text-muted-foreground">{label}</dt><dd className="min-w-0 break-words text-right font-medium">{value ?? '—'}</dd></div>)}</dl>;
 }
 
-export default function PortDetail({ port, open, onOpenChange, favorite, onFavorite, watched, onWatch, active = true, onClosed }: {
+export default function PortDetail({ port, open, onOpenChange, favorite, onFavorite, watched, onWatch, active = true, platform, onStopped, onClosed }: {
   port: Port | null; open: boolean; onOpenChange: (open: boolean) => void;
   favorite: boolean; onFavorite: (port: number) => void; watched: boolean; onWatch: (port: number) => void;
-  active?: boolean; onClosed?: () => void;
+  active?: boolean; platform?: string; onStopped?: () => void; onClosed?: () => void;
 }) {
   const [process, setProcess] = useState<ProcessDetail | null>(null);
   const [processError, setProcessError] = useState<string | null>(null);
@@ -40,7 +40,12 @@ export default function PortDetail({ port, open, onOpenChange, favorite, onFavor
   const [attempt, setAttempt] = useState(0);
   const [tab, setTab] = useState('overview');
   const [revealHeaders, setRevealHeaders] = useState(false);
-  const pid = port?.pid;
+  const [stopTarget, setStopTarget] = useState<{ port: number; pid: number; startedAt: string; name: string } | null>(null);
+  const [stopping, setStopping] = useState(false), [stopError, setStopError] = useState(''), [stopped, setStopped] = useState('');
+  const stopPending = useRef(false), mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { if (!stopPending.current) setStopTarget(null); }, [open, port?.port, port?.pid, process?.startedAt]);
+  const pid = port?.pid ?? 0;
   useEffect(() => { if (open) setTab('overview'); setRevealHeaders(false); }, [open, port?.port]);
   useEffect(() => {
     setProcess(null); setProcessError(null); setLoading(false);
@@ -60,7 +65,7 @@ export default function PortDetail({ port, open, onOpenChange, favorite, onFavor
       finally { if (!controller.signal.aborted) setLoading(false); }
     })();
     return () => controller.abort();
-  }, [open, pid, attempt]);
+  }, [open, pid, port?.port, attempt]);
 
   const samples = useMemo(() => (port?.latencyHistory ?? []).filter(value => Number.isFinite(value) && value >= 0).slice(-30).map((latency, index) => ({ sample: index + 1, latency })), [port?.latencyHistory]);
   if (!port) return null;
@@ -69,8 +74,32 @@ export default function PortDetail({ port, open, onOpenChange, favorite, onFavor
   const copy = async (text: string) => { try { await copyText(text); toast.success(t('toast.copied')); } catch { toast.error(l('Clipboard unavailable. Copy the address manually.', 'Clipboard tidak tersedia. Salin alamat secara manual.')); } };
   const probe = t('dialog.probe' + ({ done: 'Done', pending: 'Waiting', timeout: 'Timeout', error: 'Failed' }[port.probeStatus] ?? 'Failed'));
   const values = samples.map(sample => sample.latency);
+  const identity = port.port + ':' + pid + ':' + process?.startedAt;
+  const verifiedStart = process?.pid === pid && !!process.startedAt && Number.isFinite(Date.parse(process.startedAt)) && new Date(process.startedAt).toISOString() === process.startedAt;
+  const stopDisabled = stopping || loading || !active || platform !== 'win32' || port.isSelf || port.category === 'system' || !Number.isSafeInteger(pid) || pid <= 4 || !verifiedStart || stopped === identity;
+  const stopReason = platform !== 'win32' ? l('Force stop is currently available on Windows only.', 'Paksa berhenti saat ini hanya tersedia di Windows.') : port.isSelf || port.category === 'system' || pid <= 4 ? l('PortScope and protected system processes cannot be stopped here.', 'PortScope dan proses sistem terlindungi tidak dapat dihentikan di sini.') : l('A verified process identity and an active listener are required.', 'Identitas proses terverifikasi dan listener aktif diperlukan.');
+  const stopFailure = (code: string) => {
+    if (code === 'CONTROL_REQUIRED') return l('Open the private control link printed in the PortScope console, then try again. Do not share that link.', 'Buka tautan kontrol privat yang tercetak di konsol PortScope, lalu coba lagi. Jangan bagikan tautan tersebut.');
+    if (code === 'PROTECTED_PROCESS' || code === 'ACCESS_DENIED') return l('This process is protected, belongs to another user, or cannot be stopped with your current permissions.', 'Proses ini terlindungi, milik pengguna lain, atau tidak dapat dihentikan dengan izin saat ini.');
+    if (code === 'STALE_PROCESS' || code === 'PORT_OWNER_CHANGED') return l('The listener or process changed. Close this confirmation and refresh process details before trying again.', 'Listener atau proses telah berubah. Tutup konfirmasi ini lalu muat ulang detail proses sebelum mencoba lagi.');
+    if (code === 'STOP_BUSY') return l('Another stop request is running. Wait a moment and refresh before retrying.', 'Permintaan berhenti lain sedang berjalan. Tunggu sebentar lalu muat ulang sebelum mencoba lagi.');
+    if (code === 'STOP_UNSUPPORTED' || code === 'NOT_FOUND') return l('Restart PortScope with the updated backend to use force stop. This action is Windows-only.', 'Mulai ulang PortScope dengan backend terbaru untuk memakai paksa berhenti. Tindakan ini khusus Windows.');
+    return l('The process stop could not be confirmed. Refresh the listener inventory before retrying; do not assume the process is still running.', 'Penghentian proses belum dapat dikonfirmasi. Muat ulang inventaris listener sebelum mencoba lagi; jangan anggap proses masih berjalan.');
+  };
+  async function forceStop() {
+    const target = stopTarget;
+    if (stopPending.current || stopDisabled || !target || target.port !== port!.port || target.pid !== pid || target.startedAt !== process?.startedAt) return;
+    stopPending.current = true; setStopping(true); setStopError('');
+    try {
+      const response = await fetch('/api/ports/' + target.port + '/stop', { method: 'POST', headers: { 'Content-Type': 'application/json', ...controlHeaders() }, body: JSON.stringify({ pid: target.pid, startedAt: target.startedAt, confirm: true }), signal: AbortSignal.timeout(25000), cache: 'no-store' });
+      const body = await response.json();
+      if (!response.ok || body?.ok !== true || body.pid !== target.pid || body.port !== target.port || body.status !== 'stopped') { if (mounted.current) setStopError(typeof body?.error?.code === 'string' ? body.error.code : 'STOP_UNCONFIRMED'); return; }
+      if (mounted.current) { setStopped(target.port + ':' + target.pid + ':' + target.startedAt); setStopTarget(null); toast.success(l('Process stopped', 'Proses dihentikan')); onStopped?.(); }
+    } catch { if (mounted.current) setStopError('STOP_UNCONFIRMED'); }
+    finally { stopPending.current = false; if (mounted.current) setStopping(false); }
+  }
 
-  return <Dialog open={open} onOpenChange={onOpenChange}>
+  return <Dialog open={open} onOpenChange={next => { if (!stopPending.current) onOpenChange(next); }}>
     <DialogContent showCloseButton={false} className="max-h-[92dvh] grid-rows-[auto_minmax(0,1fr)_auto_auto] gap-0 overflow-hidden p-0 sm:max-w-2xl" onCloseAutoFocus={event => { if (onClosed) { event.preventDefault(); onClosed(); } }}>
       <DialogHeader className="border-b px-6 py-5 text-left">
         <div className="flex items-start justify-between gap-4">
@@ -78,7 +107,7 @@ export default function PortDetail({ port, open, onOpenChange, favorite, onFavor
             <div className="flex flex-wrap items-center gap-2"><DialogTitle className="text-xl tracking-tight">{t('dialog.title', { port: port.port })}</DialogTitle><Badge variant="secondary" className="font-mono text-[10px] uppercase">{port.protocol}</Badge>{port.isSelf && <Badge variant="outline">{t('dialog.selfBadge')}</Badge>}</div>
             <DialogDescription className="truncate">{port.title || port.processName || l('Local TCP listener', 'Listener TCP lokal')}</DialogDescription>
           </div>
-          <DialogClose asChild><Button variant="ghost" size="icon" aria-label={t('dialog.closeAria')}><X className="size-4" /></Button></DialogClose>
+          <DialogClose asChild><Button variant="ghost" size="icon" disabled={stopping} aria-label={t('dialog.closeAria')}><X className="size-4" /></Button></DialogClose>
         </div>
       </DialogHeader>
       <ScrollArea className="max-h-[min(68vh,650px)] [&>[data-slot=scroll-area-viewport]]:max-h-[min(68vh,650px)]">
@@ -119,6 +148,22 @@ export default function PortDetail({ port, open, onOpenChange, favorite, onFavor
               </> : <p className="py-14 text-center text-sm text-muted-foreground">{t('dialog.noLatency')}</p>}
             </TabsContent>
           </Tabs>
+          <section className="space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4" aria-label={l('Process control', 'Kontrol proses')}>
+            <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm font-semibold text-destructive"><ShieldAlert className="size-4" />{l('Process control', 'Kontrol proses')}</h3>
+              <AlertDialog open={!!stopTarget} onOpenChange={next => { if (stopPending.current) return; if (!next && stopError) setAttempt(value => value + 1); setStopError(''); setStopTarget(next && !stopDisabled && process?.startedAt ? { port: port.port, pid, startedAt: process.startedAt, name: process.name || port.processName || 'PID ' + pid } : null); }}>
+                <AlertDialogTrigger asChild><Button variant="destructive" size="sm" data-testid="port-force-stop" disabled={stopDisabled} title={stopDisabled ? stopReason : undefined}><Square className="size-3.5" />{l('Force stop', 'Paksa berhenti')}</Button></AlertDialogTrigger>
+                <AlertDialogContent className="border-destructive/50" onEscapeKeyDown={event => { if (stopPending.current) event.preventDefault(); }}>
+                  <AlertDialogHeader><AlertDialogTitle className="flex items-center gap-2 text-destructive"><ShieldAlert className="size-5" />{l('Force stop this process?', 'Paksa berhenti proses ini?')}</AlertDialogTitle><AlertDialogDescription>{l('This forcibly terminates the process owning this port, including its other ports and work. Unsaved data may be lost. This cannot be undone.', 'Ini menghentikan paksa proses pemilik port ini, termasuk port dan pekerjaan lainnya. Data yang belum disimpan dapat hilang. Tindakan ini tidak dapat dibatalkan.')}</AlertDialogDescription></AlertDialogHeader>
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-md border border-destructive/25 bg-destructive/5 p-3 text-sm"><dt>{t('table.headers.port')}</dt><dd className="font-mono">{stopTarget?.port}</dd><dt>{t('dialog.fields.process')}</dt><dd className="break-all font-mono">{stopTarget?.name}</dd><dt>PID</dt><dd className="font-mono">{stopTarget?.pid}</dd></dl>
+                  <p className="text-xs text-muted-foreground">{l('Only the selected process is targeted. Its child processes may also exit, and a supervisor may start it again.', 'Hanya proses terpilih yang ditargetkan. Proses anaknya juga dapat berhenti, dan supervisor dapat menjalankannya kembali.')}</p>
+                  {stopError && <Alert variant="destructive"><ShieldAlert className="size-4" /><AlertDescription role="alert">{stopFailure(stopError)}</AlertDescription></Alert>}
+                  <AlertDialogFooter><AlertDialogCancel disabled={stopping}>{l('Cancel', 'Batal')}</AlertDialogCancel><AlertDialogAction variant="destructive" data-testid="port-confirm-stop" disabled={stopDisabled || !!stopError} onClick={event => { event.preventDefault(); void forceStop(); }}>{stopping ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}{stopping ? l('Stopping…', 'Menghentikan…') : l('Yes, force stop', 'Ya, paksa berhenti')}</AlertDialogAction></AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+            {stopError && !stopTarget && <Alert variant="destructive"><ShieldAlert className="size-4" /><AlertDescription role="alert">{stopFailure(stopError)}</AlertDescription></Alert>}
+            <p className="text-xs leading-relaxed text-muted-foreground">{stopped === identity ? l('The process exited. Refresh to check whether this port was opened again.', 'Proses telah berhenti. Muat ulang untuk memeriksa apakah port ini dibuka kembali.') : stopDisabled ? stopReason : l('Stop the owning process, not just this port. Review the consequences before confirming.', 'Hentikan proses pemiliknya, bukan hanya port ini. Periksa dampaknya sebelum mengonfirmasi.')}</p>
+          </section>
         </div>
       </ScrollArea>
       <Separator />
